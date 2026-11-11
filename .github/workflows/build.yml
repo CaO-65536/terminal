@@ -1,0 +1,334 @@
+
+name: Build Windows Terminal
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      output_format:
+        description: "Select build artifacts"
+        required: true
+        type: choice
+        default: both
+        options:
+          - raw
+          - installer
+          - both
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      # 1. Checkout source
+      - name: Checkout Windows Terminal source
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      # 2. Initialize MSBuild
+      - name: Initialize MSBuild
+        uses: microsoft/setup-msbuild@v3
+
+      # 3. Initialize NuGet
+      - name: Initialize NuGet
+        uses: nuget/setup-nuget@v3
+
+      # 4. Configure vcpkg
+      - name: Configure vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgJsonGlob: 'vcpkg.json'
+
+      # 5. Configure artifact selection
+      - name: Configure artifact selection
+        id: output_mode
+        shell: pwsh
+        env:
+          OUTPUT_FORMAT: ${{ inputs.output_format || 'both' }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $mode = $env:OUTPUT_FORMAT
+
+          if ($mode -notin @("raw", "installer", "both")) {
+            throw "Invalid output format: $mode"
+          }
+
+          "mode=$mode" >> $env:GITHUB_OUTPUT
+
+          Write-Host "Selected artifact format: $mode"
+
+      # 6. Restore dependencies and build
+      - name: Restore dependencies and build Windows Terminal
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $logDir = ".\artifacts\logs"
+          New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+
+          $transcriptLog = Join-Path $logDir "workflow-transcript.log"
+          $consoleLog = Join-Path $logDir "msbuild-console.log"
+          $diagnosticLog = Join-Path $logDir "msbuild-diagnostic.log"
+          $binaryLog = Join-Path $logDir "msbuild.binlog"
+
+          Start-Transcript -Path $transcriptLog -Force
+
+          try {
+            Write-Host "========================================"
+            Write-Host " Windows Terminal Build Environment"
+            Write-Host "========================================"
+
+            # Restore solution NuGet dependencies
+            Write-Host "`n[1/4] Restoring solution NuGet packages..."
+
+            & nuget restore .\OpenConsole.slnx `
+              -NonInteractive `
+              -Verbosity detailed
+
+            if ($LASTEXITCODE -ne 0) {
+              throw "Solution NuGet restore failed! Exit code: $LASTEXITCODE"
+            }
+
+            # Restore centralized native NuGet dependencies
+            Write-Host "`n[2/4] Restoring native NuGet packages..."
+
+            & nuget restore .\dep\nuget\packages.config `
+              -PackagesDirectory .\packages `
+              -NonInteractive `
+              -Verbosity detailed
+
+            if ($LASTEXITCODE -ne 0) {
+              throw "Native NuGet restore failed! Exit code: $LASTEXITCODE"
+            }
+
+            # Verify WIL
+            $wil = ".\packages\Microsoft.Windows.ImplementationLibrary.1.0.250325.1\build\native\Microsoft.Windows.ImplementationLibrary.targets"
+
+            if (!(Test-Path $wil)) {
+              throw "WIL package is missing: $wil"
+            }
+
+            Write-Host "WIL package restored successfully!"
+
+            # Initialize official build environment
+            Write-Host "`n[3/4] Initializing Windows Terminal build environment..."
+
+            Import-Module .\tools\OpenConsole.psm1 -Force
+            Set-MsBuildDevEnvironment
+
+            $msbuild = (Get-Command MSBuild.exe -ErrorAction Stop).Source
+
+            Write-Host "MSBuild: $msbuild"
+            Write-Host "Configuration: Release"
+            Write-Host "Platform: x64"
+
+            # Build Windows Terminal MSIX
+            Write-Host "`n[4/4] Building Windows Terminal..."
+
+            $msbuildArgs = @(
+              ".\OpenConsole.slnx"
+              "/p:Configuration=Release"
+              "/p:Platform=x64"
+              "/p:AppxSymbolPackageEnabled=false"
+              "/t:Terminal\CascadiaPackage"
+              "/m"
+              "/v:diag"
+              "/nologo"
+              "/fl"
+              "/flp:logfile=$diagnosticLog;verbosity=diagnostic"
+              "/bl:$binaryLog"
+            )
+
+            & $msbuild @msbuildArgs 2>&1 |
+              Tee-Object -FilePath $consoleLog
+
+            $buildExitCode = $LASTEXITCODE
+
+            Write-Host "Build Exit Code: $buildExitCode"
+
+            if ($buildExitCode -ne 0) {
+              throw "Windows Terminal build failed! Exit code: $buildExitCode"
+            }
+
+            Write-Host "Windows Terminal build completed successfully!"
+          }
+          finally {
+            Stop-Transcript
+          }
+
+      # 7. Verify and prepare selected artifacts
+      - name: Prepare RAW and Installer artifacts
+        shell: pwsh
+        env:
+          OUTPUT_FORMAT: ${{ steps.output_mode.outputs.mode }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $appPackages = ".\src\cascadia\CascadiaPackage\AppPackages"
+          $outputRoot = ".\artifacts\output"
+
+          if (!(Test-Path $appPackages)) {
+            throw "AppPackages directory not found!"
+          }
+
+          # Find generated package directory
+          $packageDirs = @(
+            Get-ChildItem $appPackages -Directory |
+              Where-Object {
+                Test-Path (Join-Path $_.FullName "Add-AppDevPackage.ps1")
+              }
+          )
+
+          if ($packageDirs.Count -eq 0) {
+            throw "No installable package directory found!"
+          }
+
+          $packageDir = $packageDirs |
+            Select-Object -First 1
+
+          Write-Host "Package directory: $($packageDir.FullName)"
+
+          # Locate main MSIX package
+          $packages = @(
+            Get-ChildItem $packageDir.FullName -File -Filter "*.msix"
+          )
+
+          if ($packages.Count -eq 0) {
+            throw "No MSIX package found!"
+          }
+
+          $msix = $packages |
+            Select-Object -First 1
+
+          Write-Host "Main package: $($msix.FullName)"
+
+          New-Item -ItemType Directory -Force -Path $outputRoot |
+            Out-Null
+
+          # ========================================
+          # RAW: Unpacked MSIX application payload
+          # ========================================
+
+          if ($env:OUTPUT_FORMAT -in @("raw", "both")) {
+            Write-Host "`nPreparing RAW artifact..."
+
+            Import-Module .\tools\OpenConsole.psm1 -Force
+            Set-MsBuildDevEnvironment
+
+            $makeappx = (Get-Command makeappx.exe -ErrorAction Stop).Source
+
+            $rawDir = Join-Path $outputRoot "RAW"
+            $rawZip = Join-Path $outputRoot "WindowsTerminal-RAW-x64.zip"
+
+            New-Item -ItemType Directory -Force -Path $rawDir |
+              Out-Null
+
+            & $makeappx unpack `
+              /p $msix.FullName `
+              /d $rawDir `
+              /o
+
+            if ($LASTEXITCODE -ne 0) {
+              throw "MSIX unpack failed! Exit code: $LASTEXITCODE"
+            }
+
+            if (!(Test-Path (Join-Path $rawDir "AppxManifest.xml"))) {
+              throw "RAW package validation failed: AppxManifest.xml missing!"
+            }
+
+            Compress-Archive `
+              -Path "$rawDir\*" `
+              -DestinationPath $rawZip `
+              -CompressionLevel Optimal `
+              -Force
+
+            Write-Host "RAW artifact created: $rawZip"
+          }
+
+          # ========================================
+          # INSTALLER: Complete installable package
+          # ========================================
+
+          if ($env:OUTPUT_FORMAT -in @("installer", "both")) {
+            Write-Host "`nPreparing Installer artifact..."
+
+            $installerDir = Join-Path $outputRoot "Installer"
+            $installerZip = Join-Path $outputRoot "WindowsTerminal-Installer-x64.zip"
+
+            New-Item -ItemType Directory -Force -Path $installerDir |
+              Out-Null
+
+            # Preserve the original package directory structure
+            $copiedPackage = Join-Path $installerDir $packageDir.Name
+
+            New-Item -ItemType Directory -Force -Path $copiedPackage |
+              Out-Null
+
+            Get-ChildItem $packageDir.FullName -Force |
+              Copy-Item -Destination $copiedPackage -Recurse -Force
+
+            # Validate installer contents
+            if (!(Test-Path (Join-Path $copiedPackage "Add-AppDevPackage.ps1"))) {
+              throw "Installer validation failed: Add-AppDevPackage.ps1 missing!"
+            }
+
+            if (!(Get-ChildItem $copiedPackage -File -Filter "*.msix")) {
+              throw "Installer validation failed: MSIX missing!"
+            }
+
+            Compress-Archive `
+              -Path "$installerDir\*" `
+              -DestinationPath $installerZip `
+              -CompressionLevel Optimal `
+              -Force
+
+            Write-Host "Installer artifact created: $installerZip"
+          }
+
+          Write-Host "`n========================================"
+          Write-Host " Generated Artifacts"
+          Write-Host "========================================"
+
+          Get-ChildItem $outputRoot -File -Recurse |
+            Select-Object FullName, Length |
+            Format-Table -AutoSize
+
+      # 8. Upload diagnostic logs, even if build fails
+      - name: Upload complete build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: WindowsTerminal-Build-Logs
+          path: artifacts/logs/
+          if-no-files-found: warn
+          compression-level: 6
+          retention-days: 30
+
+      # 9. Upload RAW
+      - name: Upload Windows Terminal RAW
+        if: success() && (steps.output_mode.outputs.mode == 'raw' || steps.output_mode.outputs.mode == 'both')
+        uses: actions/upload-artifact@v4
+        with:
+          name: WindowsTerminal-RAW-x64
+          path: artifacts/output/WindowsTerminal-RAW-x64.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      # 10. Upload Installer
+      - name: Upload Windows Terminal Installer
+        if: success() && (steps.output_mode.outputs.mode == 'installer' || steps.output_mode.outputs.mode == 'both')
+        uses: actions/upload-artifact@v4
+        with:
+          name: WindowsTerminal-Installer-x64
+          path: artifacts/output/WindowsTerminal-Installer-x64.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
