@@ -545,26 +545,25 @@ void ControlInteractivity::TouchPressed(const Core::Point contactPoint,
         _touchScrolling = true;
         _touchAnchor = start;
     }
+if (_touchScrolling && _touchAnchor)
+{
+    const auto anchor = *_touchAnchor;
+    const auto scrollDy = newTouchPoint.Y - anchor.Y;
 
-    if (_touchScrolling)
+    if (std::abs(scrollDy) > verticalThreshold)
     {
-        const auto anchor = *_touchAnchor;
-        const auto scrollDy = newTouchPoint.Y - anchor.Y;
+        const auto numRows = scrollDy / -fontSize.Height;
 
-        if (std::abs(scrollDy) > verticalThreshold)
-        {
-            const auto numRows = scrollDy / -fontSize.Height;
+        const auto currentOffset = _core->ScrollOffset();
+        const auto newValue = numRows + currentOffset;
 
-            const auto currentOffset = _core->ScrollOffset();
-            const auto newValue = numRows + currentOffset;
+        UpdateScrollbar(newValue);
 
-            UpdateScrollbar(newValue);
-
-            _touchAnchor = newTouchPoint;
-        }
-
-        return;
+        _touchAnchor = newTouchPoint;
     }
+
+    return;
+}
 
     
     // Long press followed by movement starts text selection.

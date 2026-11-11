@@ -57,7 +57,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                             const uint64_t timestamp,
                             const ::Microsoft::Terminal::Core::ControlKeyStates modifiers,
                             const Core::Point pixelPosition);
-        void TouchPressed(const Core::Point contactPoint
+        void TouchPressed(const Core::Point contactPoint,
                           const uint32_t pointerId,
                           const uint64_t timestamp);
 
@@ -119,6 +119,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         
         // Touch gesture state.
         std::optional<Core::Point> _touchStartPoint;
+        std::optional<Core::Point> _touchAnchor;
         uint32_t _touchPointerId{ 0 };
         uint64_t _touchStartTimestamp{ 0 };
 
