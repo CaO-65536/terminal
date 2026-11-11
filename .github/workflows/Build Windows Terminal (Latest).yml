@@ -15,113 +15,176 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    # 1. Checkout current repository (including your modifications)
-    - name: Checkout Windows Terminal source
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
+      # 1. Checkout source
+      - name: Checkout Windows Terminal source
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
 
-    # 2. Initialize MSBuild
-    - name: Initialize MSBuild
-      uses: microsoft/setup-msbuild@v3
+      # 2. Initialize MSBuild
+      - name: Initialize MSBuild
+        uses: microsoft/setup-msbuild@v3
 
-    # 3. Initialize NuGet
-    - name: Initialize NuGet
-      uses: nuget/setup-nuget@v3
+      # 3. Initialize NuGet
+      - name: Initialize NuGet
+        uses: nuget/setup-nuget@v3
 
-    # 4. Configure vcpkg
-    - name: Configure vcpkg
-      uses: lukka/run-vcpkg@v11
-      with:
-        vcpkgJsonGlob: 'vcpkg.json'
+      # 4. Configure vcpkg
+      - name: Configure vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgJsonGlob: 'vcpkg.json'
 
-    # 5. Restore solution NuGet dependencies
-    - name: Restore solution NuGet packages
-      shell: pwsh
-      run: |
-        nuget restore .\OpenConsole.slnx `
-          -NonInteractive `
-          -Verbosity normal
+      # 5. Restore dependencies and build Windows Terminal
+      - name: Restore dependencies and build Windows Terminal
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
 
-        if ($LASTEXITCODE -ne 0) {
-          throw "Solution NuGet restore failed!"
-        }
+          $logDir = ".\artifacts\logs"
+          New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
-    # 6. Restore centralized native NuGet dependencies
-    - name: Restore native NuGet packages
-      shell: pwsh
-      run: |
-        nuget restore .\dep\nuget\packages.config `
-          -PackagesDirectory .\packages `
-          -NonInteractive `
-          -Verbosity normal
+          $transcriptLog = Join-Path $logDir "workflow-transcript.log"
+          $consoleLog = Join-Path $logDir "msbuild-console.log"
+          $diagnosticLog = Join-Path $logDir "msbuild-diagnostic.log"
+          $binaryLog = Join-Path $logDir "msbuild.binlog"
 
-        if ($LASTEXITCODE -ne 0) {
-          throw "Native NuGet restore failed!"
-        }
+          Start-Transcript -Path $transcriptLog -Force
 
-        $wil = ".\packages\Microsoft.Windows.ImplementationLibrary.1.0.250325.1\build\native\Microsoft.Windows.ImplementationLibrary.targets"
+          try {
+            Write-Host "========================================"
+            Write-Host " Windows Terminal Build Environment"
+            Write-Host "========================================"
 
-        if (!(Test-Path $wil)) {
-          throw "WIL package is still missing!"
-        }
+            # Restore solution NuGet dependencies
+            Write-Host "`n[1/4] Restoring solution NuGet packages..."
 
-        Write-Host "WIL package restored successfully!"
+            & nuget restore .\OpenConsole.slnx `
+              -NonInteractive `
+              -Verbosity detailed
 
-    # 7. Initialize official build environment
-    - name: Initialize Windows Terminal build environment
-      shell: pwsh
-      run: |
-        Import-Module .\tools\OpenConsole.psm1
-        Set-MsBuildDevEnvironment
+            if ($LASTEXITCODE -ne 0) {
+              throw "Solution NuGet restore failed! Exit code: $LASTEXITCODE"
+            }
 
-    # 8. Build Windows Terminal MSIX
-    - name: Build Windows Terminal MSIX
-      shell: pwsh
-      run: |
-        $msbuild = (Get-Command MSBuild.exe -ErrorAction Stop).Source
+            # Restore centralized native NuGet dependencies
+            Write-Host "`n[2/4] Restoring native NuGet packages..."
 
-        & $msbuild .\OpenConsole.slnx `
-          /p:Configuration=Release `
-          /p:Platform=x64 `
-          /p:AppxSymbolPackageEnabled=false `
-          /t:Terminal\CascadiaPackage `
-          /m
+            & nuget restore .\dep\nuget\packages.config `
+              -PackagesDirectory .\packages `
+              -NonInteractive `
+              -Verbosity detailed
 
-        if ($LASTEXITCODE -ne 0) {
-          throw "Windows Terminal packaging failed!"
-        }
+            if ($LASTEXITCODE -ne 0) {
+              throw "Native NuGet restore failed! Exit code: $LASTEXITCODE"
+            }
 
-    # 9. Verify generated packages
-    - name: Verify generated packages
-      shell: pwsh
-      run: |
-        $path = ".\src\cascadia\CascadiaPackage\AppPackages"
+            # Verify WIL
+            $wil = ".\packages\Microsoft.Windows.ImplementationLibrary.1.0.250325.1\build\native\Microsoft.Windows.ImplementationLibrary.targets"
 
-        if (!(Test-Path $path)) {
-          throw "AppPackages directory not found!"
-        }
+            if (!(Test-Path $wil)) {
+              throw "WIL package is missing: $wil"
+            }
 
-        $files = Get-ChildItem $path -Recurse -File
+            Write-Host "WIL package restored successfully!"
 
-        $files | Select-Object FullName, Length
+            # Initialize official build environment.
+            # IMPORTANT: This must run in the SAME step as MSBuild.
+            Write-Host "`n[3/4] Initializing Windows Terminal build environment..."
 
-        $packages = $files | Where-Object {
-          $_.Extension -in @(".msix", ".msixbundle")
-        }
+            Import-Module .\tools\OpenConsole.psm1 -Force
+            Set-MsBuildDevEnvironment
 
-        if (!$packages) {
-          throw "No MSIX packages were generated!"
-        }
+            $msbuild = (Get-Command MSBuild.exe -ErrorAction Stop).Source
 
-        Write-Host "Found $($packages.Count) MSIX package(s)."
+            Write-Host "MSBuild: $msbuild"
+            Write-Host "Configuration: Release"
+            Write-Host "Platform: x64"
 
-    # 10. Upload Windows Terminal packages
-    - name: Upload Windows Terminal MSIX
-      uses: actions/upload-artifact@v4
-      with:
-        name: WindowsTerminal-Release-x64
-        path: src/cascadia/CascadiaPackage/AppPackages/**
-        if-no-files-found: error
-        compression-level: 6
-        retention-days: 14
+            # Build Windows Terminal MSIX
+            Write-Host "`n[4/4] Building Windows Terminal MSIX..."
+
+            $msbuildArgs = @(
+              ".\OpenConsole.slnx"
+              "/p:Configuration=Release"
+              "/p:Platform=x64"
+              "/p:AppxSymbolPackageEnabled=false"
+              "/t:Terminal\CascadiaPackage"
+              "/m"
+              "/v:diag"
+              "/nologo"
+              "/fl"
+              "/flp:logfile=$diagnosticLog;verbosity=diagnostic"
+              "/bl:$binaryLog"
+            )
+
+            Write-Host "`n========================================"
+            Write-Host " MSBuild Full Diagnostic Output"
+            Write-Host "========================================"
+
+            & $msbuild @msbuildArgs 2>&1 |
+              Tee-Object -FilePath $consoleLog
+
+            $buildExitCode = $LASTEXITCODE
+
+            Write-Host "`n========================================"
+            Write-Host " Build Exit Code: $buildExitCode"
+            Write-Host "========================================"
+
+            if ($buildExitCode -ne 0) {
+              throw "Windows Terminal packaging failed! Exit code: $buildExitCode. Check MSBuild diagnostic logs and binary log."
+            }
+
+            Write-Host "`nWindows Terminal build completed successfully!"
+          }
+          finally {
+            Stop-Transcript
+          }
+
+      # 6. Verify generated packages
+      - name: Verify generated packages
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $path = ".\src\cascadia\CascadiaPackage\AppPackages"
+
+          if (!(Test-Path $path)) {
+            throw "AppPackages directory not found!"
+          }
+
+          $files = Get-ChildItem $path -Recurse -File
+
+          $files | Select-Object FullName, Length | Format-Table -AutoSize
+
+          $packages = $files | Where-Object {
+            $_.Extension -in @(".msix", ".msixbundle")
+          }
+
+          if (!$packages) {
+            throw "No MSIX packages were generated!"
+          }
+
+          Write-Host "Found $($packages.Count) MSIX package(s)."
+
+      # 7. Upload diagnostic logs, even if the build fails
+      - name: Upload complete build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: WindowsTerminal-Build-Logs
+          path: artifacts/logs/
+          if-no-files-found: warn
+          compression-level: 6
+          retention-days: 30
+
+      # 8. Upload generated MSIX packages
+      - name: Upload Windows Terminal packages
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: WindowsTerminal-Release-x64
+          path: src/cascadia/CascadiaPackage/AppPackages/**
+          if-no-files-found: error
+          compression-level: 6
+          retention-days: 14
