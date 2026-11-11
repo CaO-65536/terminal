@@ -15,29 +15,55 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    - name: 1. Checkout Windows Terminal source
+    # 1. 检出当前仓库
+    - name: Checkout Windows Terminal source
       uses: actions/checkout@v4
       with:
         submodules: recursive
 
-    - name: 2. Initialize MSBuild
+    # 2. 初始化 MSBuild
+    - name: Initialize MSBuild
       uses: microsoft/setup-msbuild@v3
 
-    - name: 3. Initialize NuGet
+    # 3. 初始化 NuGet
+    - name: Initialize NuGet
       uses: nuget/setup-nuget@v3
 
-    - name: 4. Configure vcpkg
+    # 4. 配置 vcpkg
+    - name: Configure vcpkg
       uses: lukka/run-vcpkg@v11
       with:
         vcpkgJsonGlob: 'vcpkg.json'
 
-    - name: 5. Initialize build environment
+    # 5. 恢复 NuGet 依赖
+    - name: Restore NuGet packages
+      shell: pwsh
+      run: |
+        nuget restore .\OpenConsole.slnx `
+          -NonInteractive `
+          -Verbosity normal
+
+        if ($LASTEXITCODE -ne 0) {
+          throw "NuGet package restore failed!"
+        }
+
+        $wil = ".\packages\Microsoft.Windows.ImplementationLibrary.1.0.250325.1\build\native\Microsoft.Windows.ImplementationLibrary.targets"
+
+        if (!(Test-Path $wil)) {
+          throw "WIL NuGet package was not restored!"
+        }
+
+        Write-Host "WIL package restored successfully."
+
+    # 6. 初始化官方构建环境
+    - name: Initialize Windows Terminal build environment
       shell: pwsh
       run: |
         Import-Module .\tools\OpenConsole.psm1
         Set-MsBuildDevEnvironment
 
-    - name: 6. Build Windows Terminal MSIX
+    # 7. 构建 Windows Terminal MSIX
+    - name: Build Windows Terminal MSIX
       shell: pwsh
       run: |
         $msbuild = (Get-Command MSBuild.exe -ErrorAction Stop).Source
@@ -53,7 +79,8 @@ jobs:
           throw "Windows Terminal packaging failed!"
         }
 
-    - name: 7. List generated packages
+    # 8. 检查构建产物
+    - name: Verify generated packages
       shell: pwsh
       run: |
         $path = ".\src\cascadia\CascadiaPackage\AppPackages"
@@ -66,13 +93,18 @@ jobs:
           Select-Object FullName, Length
 
         $packages = Get-ChildItem $path -Recurse -File |
-          Where-Object { $_.Extension -in @(".msix", ".msixbundle") }
+          Where-Object {
+            $_.Extension -in @(".msix", ".msixbundle")
+          }
 
         if (!$packages) {
           throw "No MSIX packages were generated!"
         }
 
-    - name: 8. Upload Windows Terminal packages
+        Write-Host "Found $($packages.Count) MSIX package(s)."
+
+    # 9. 上传安装包
+    - name: Upload Windows Terminal MSIX
       uses: actions/upload-artifact@v4
       with:
         name: WindowsTerminal-Release-x64
