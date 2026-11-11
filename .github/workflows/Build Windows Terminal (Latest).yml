@@ -15,28 +15,28 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    # 1. 检出当前仓库
+    # 1. Checkout current repository (including your modifications)
     - name: Checkout Windows Terminal source
       uses: actions/checkout@v4
       with:
         submodules: recursive
 
-    # 2. 初始化 MSBuild
+    # 2. Initialize MSBuild
     - name: Initialize MSBuild
       uses: microsoft/setup-msbuild@v3
 
-    # 3. 初始化 NuGet
+    # 3. Initialize NuGet
     - name: Initialize NuGet
       uses: nuget/setup-nuget@v3
 
-    # 4. 配置 vcpkg
+    # 4. Configure vcpkg
     - name: Configure vcpkg
       uses: lukka/run-vcpkg@v11
       with:
         vcpkgJsonGlob: 'vcpkg.json'
 
-    # 5. 恢复 NuGet 依赖
-    - name: Restore NuGet packages
+    # 5. Restore solution NuGet dependencies
+    - name: Restore solution NuGet packages
       shell: pwsh
       run: |
         nuget restore .\OpenConsole.slnx `
@@ -44,25 +44,38 @@ jobs:
           -Verbosity normal
 
         if ($LASTEXITCODE -ne 0) {
-          throw "NuGet package restore failed!"
+          throw "Solution NuGet restore failed!"
+        }
+
+    # 6. Restore centralized native NuGet dependencies
+    - name: Restore native NuGet packages
+      shell: pwsh
+      run: |
+        nuget restore .\dep\nuget\packages.config `
+          -PackagesDirectory .\packages `
+          -NonInteractive `
+          -Verbosity normal
+
+        if ($LASTEXITCODE -ne 0) {
+          throw "Native NuGet restore failed!"
         }
 
         $wil = ".\packages\Microsoft.Windows.ImplementationLibrary.1.0.250325.1\build\native\Microsoft.Windows.ImplementationLibrary.targets"
 
         if (!(Test-Path $wil)) {
-          throw "WIL NuGet package was not restored!"
+          throw "WIL package is still missing!"
         }
 
-        Write-Host "WIL package restored successfully."
+        Write-Host "WIL package restored successfully!"
 
-    # 6. 初始化官方构建环境
+    # 7. Initialize official build environment
     - name: Initialize Windows Terminal build environment
       shell: pwsh
       run: |
         Import-Module .\tools\OpenConsole.psm1
         Set-MsBuildDevEnvironment
 
-    # 7. 构建 Windows Terminal MSIX
+    # 8. Build Windows Terminal MSIX
     - name: Build Windows Terminal MSIX
       shell: pwsh
       run: |
@@ -79,7 +92,7 @@ jobs:
           throw "Windows Terminal packaging failed!"
         }
 
-    # 8. 检查构建产物
+    # 9. Verify generated packages
     - name: Verify generated packages
       shell: pwsh
       run: |
@@ -89,13 +102,13 @@ jobs:
           throw "AppPackages directory not found!"
         }
 
-        Get-ChildItem $path -Recurse -File |
-          Select-Object FullName, Length
+        $files = Get-ChildItem $path -Recurse -File
 
-        $packages = Get-ChildItem $path -Recurse -File |
-          Where-Object {
-            $_.Extension -in @(".msix", ".msixbundle")
-          }
+        $files | Select-Object FullName, Length
+
+        $packages = $files | Where-Object {
+          $_.Extension -in @(".msix", ".msixbundle")
+        }
 
         if (!$packages) {
           throw "No MSIX packages were generated!"
@@ -103,7 +116,7 @@ jobs:
 
         Write-Host "Found $($packages.Count) MSIX package(s)."
 
-    # 9. 上传安装包
+    # 10. Upload Windows Terminal packages
     - name: Upload Windows Terminal MSIX
       uses: actions/upload-artifact@v4
       with:
