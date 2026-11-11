@@ -1977,9 +1977,10 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         {
             // NB: I don't think this is correct because the touch should be in the center of the rect.
             //     I suspect the point.Position() would be correct.
-            const auto contactRect = point.Properties().ContactRect();
-            til::point newTouchPoint{ til::math::rounding, contactRect.X, contactRect.Y };
-            _interactivity->TouchPressed(newTouchPoint.to_core_point());
+            _interactivity->TouchPressed(
+        _toTerminalOrigin(point.Position()),
+        point.PointerId(),
+        point.Timestamp());
         }
         else
         {
@@ -2032,10 +2033,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         }
         else if (type == Windows::Devices::Input::PointerDeviceType::Touch)
         {
-            const auto contactRect = point.Properties().ContactRect();
-            til::point newTouchPoint{ til::math::rounding, contactRect.X, contactRect.Y };
-
-            _interactivity->TouchMoved(newTouchPoint.to_core_point());
+            _interactivity->TouchMoved(pixelPosition);
         }
 
         args.Handled(true);
@@ -2074,7 +2072,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         }
         else if (type == Windows::Devices::Input::PointerDeviceType::Touch)
         {
-            _interactivity->TouchReleased();
+            _interactivity->TouchReleased(pixelPosition);
         }
 
         args.Handled(true);

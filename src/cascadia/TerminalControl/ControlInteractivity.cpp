@@ -385,10 +385,21 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         }
     }
 
-    void ControlInteractivity::TouchPressed(const Core::Point contactPoint)
-    {
-        _touchAnchor = contactPoint;
-    }
+    
+void ControlInteractivity::TouchPressed(const Core::Point contactPoint,
+                                        const uint32_t pointerId,
+                                        const uint64_t timestamp)
+{
+    _touchStartPoint = contactPoint;
+    _touchAnchor = contactPoint;
+
+    _touchPointerId = pointerId;
+    _touchStartTimestamp = timestamp;
+    _touchStartTime = std::chrono::steady_clock::now();
+
+    _touchSelectionActive = false;
+    _touchScrolling = false;
+}
 
     bool ControlInteractivity::PointerMoved(const uint32_t pointerId,
                                             Control::MouseButtonState buttonState,
@@ -488,40 +499,119 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     }
 
     void ControlInteractivity::TouchMoved(const Core::Point newTouchPoint)
+{
+    if (!_focused || !_touchStartPoint)
     {
-        if (_focused &&
-            _touchAnchor)
-        {
-            const auto anchor = _touchAnchor.value();
-
-            // Our actualFont's size is in pixels, convert to DIPs, which the
-            // rest of the Points here are in.
-            const auto fontSizeInDips{ _core->FontSizeInDips() };
-
-            // Get the difference between the point we've dragged to and the start of the touch.
-            const auto dy = static_cast<float>(newTouchPoint.Y - anchor.Y);
-
-            // Start viewport scroll after we've moved more than a half row of text
-            if (std::abs(dy) > (fontSizeInDips.Height / 2.0f))
-            {
-                // Multiply by -1, because moving the touch point down will
-                // create a positive delta, but we want the viewport to move up,
-                // so we'll need a negative scroll amount (and the inverse for
-                // panning down)
-                const auto numRows = dy / -fontSizeInDips.Height;
-
-                const auto currentOffset = _core->ScrollOffset();
-                const auto newValue = numRows + currentOffset;
-
-                // Update the Core's viewport position, and raise a
-                // ScrollPositionChanged event to update the scrollbar
-                UpdateScrollbar(newValue);
-
-                // Use this point as our new scroll anchor.
-                _touchAnchor = newTouchPoint;
-            }
-        }
+        return;
     }
+
+    const auto start = *_touchStartPoint;
+
+    const auto dx = newTouchPoint.X - start.X;
+    const auto dy = newTouchPoint.Y - start.Y;
+
+    const auto absDx = std::abs(dx);
+    const auto absDy = std::abs(dy);
+
+    const auto fontSize = _core->FontSizeInDips();
+
+    const auto horizontalThreshold = fontSize.Width / 2.0f;
+    const auto verticalThreshold = fontSize.Height / 2.0f;
+
+    const auto longPressed =
+        std::chrono::steady_clock::now() - _touchStartTime >=
+        std::chrono::milliseconds(500);
+
+    // A touch that has already become a selection gesture
+    // continues to behave exactly like a pressed mouse button.
+    if (_touchSelectionActive)
+    {
+        PointerMoved(
+            _touchPointerId,
+            MouseButtonState::IsLeftButtonDown,
+            WM_MOUSEMOVE,
+            {},
+            newTouchPoint);
+
+        return;
+    }
+
+
+    // Vertical dragging retains the existing touch scrolling behavior.
+    if (!_touchScrolling &&
+        absDy >= verticalThreshold &&
+        absDy >= absDx)
+    {
+        _touchScrolling = true;
+        _touchAnchor = start;
+    }
+
+    if (_touchScrolling)
+    {
+        const auto anchor = *_touchAnchor;
+        const auto scrollDy = newTouchPoint.Y - anchor.Y;
+
+        if (std::abs(scrollDy) > verticalThreshold)
+        {
+            const auto numRows = scrollDy / -fontSize.Height;
+
+            const auto currentOffset = _core->ScrollOffset();
+            const auto newValue = numRows + currentOffset;
+
+            UpdateScrollbar(newValue);
+
+            _touchAnchor = newTouchPoint;
+        }
+
+        return;
+    }
+
+    
+    // Long press followed by movement starts text selection.
+    if (longPressed && (absDx > 4.0f || absDy > 4.0f))
+    {
+        _touchSelectionActive = true;
+
+        PointerPressed(
+            _touchPointerId,
+            MouseButtonState::IsLeftButtonDown,
+            WM_LBUTTONDOWN,
+            _touchStartTimestamp,
+            {},
+            start);
+
+        PointerMoved(
+            _touchPointerId,
+            MouseButtonState::IsLeftButtonDown,
+            WM_MOUSEMOVE,
+            {},
+            newTouchPoint);
+
+        return;
+    }
+
+    // TODO: Horizontal touch scrolling is not implemented yet.
+    // For now, horizontal touch drags are treated as text selection.
+    if (absDx >= horizontalThreshold && absDx > absDy)
+    {
+        _touchSelectionActive = true;
+
+        PointerPressed(
+            _touchPointerId,
+            MouseButtonState::IsLeftButtonDown,
+            WM_LBUTTONDOWN,
+            _touchStartTimestamp,
+            {},
+            start);
+
+        PointerMoved(
+            _touchPointerId,
+            MouseButtonState::IsLeftButtonDown,
+            WM_MOUSEMOVE,
+            {},
+            newTouchPoint);
+    }
+}
 
     void ControlInteractivity::PointerReleased(const uint32_t pointerId,
                                                Control::MouseButtonState buttonState,
@@ -565,10 +655,47 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         _tryStopAutoScroll(pointerId);
     }
 
-    void ControlInteractivity::TouchReleased()
+    void ControlInteractivity::TouchReleased(const Core::Point contactPoint)
+{
+    if (!_touchStartPoint)
     {
-        _touchAnchor = std::nullopt;
+        return;
     }
+
+    if (_touchSelectionActive)
+    {
+        PointerReleased(
+            _touchPointerId,
+            {},
+            WM_LBUTTONUP,
+            {},
+            contactPoint);
+    }
+    else if (!_touchScrolling)
+    {
+        // A touch without a drag is a complete left mouse click.
+        PointerPressed(
+            _touchPointerId,
+            MouseButtonState::IsLeftButtonDown,
+            WM_LBUTTONDOWN,
+            _touchStartTimestamp,
+            {},
+            *_touchStartPoint);
+
+        PointerReleased(
+            _touchPointerId,
+            {},
+            WM_LBUTTONUP,
+            {},
+            contactPoint);
+    }
+
+    _touchStartPoint = std::nullopt;
+    _touchAnchor = std::nullopt;
+
+    _touchSelectionActive = false;
+    _touchScrolling = false;
+}
 
     // Method Description:
     // - Actually handle a scrolling event, whether from a mouse wheel or a

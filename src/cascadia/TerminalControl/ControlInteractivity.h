@@ -57,7 +57,9 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                             const uint64_t timestamp,
                             const ::Microsoft::Terminal::Core::ControlKeyStates modifiers,
                             const Core::Point pixelPosition);
-        void TouchPressed(const Core::Point contactPoint);
+        void TouchPressed(const Core::Point contactPoint
+                          const uint32_t pointerId,
+                          const uint64_t timestamp);
 
         bool PointerMoved(const uint32_t pointerId,
                           Control::MouseButtonState buttonState,
@@ -71,7 +73,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                              const unsigned int pointerUpdateKind,
                              const ::Microsoft::Terminal::Core::ControlKeyStates modifiers,
                              const Core::Point pixelPosition);
-        void TouchReleased();
+        void TouchReleased(const Core::Point contactPoint);
 
         bool MouseWheel(const ::Microsoft::Terminal::Core::ControlKeyStates modifiers,
                         const Core::Point delta,
@@ -114,7 +116,16 @@ namespace winrt::Microsoft::Terminal::Control::implementation
 
         // If this is set, then we assume we are in the middle of panning the
         //      viewport via touch input.
-        std::optional<Core::Point> _touchAnchor;
+        
+        // Touch gesture state.
+        std::optional<Core::Point> _touchStartPoint;
+        uint32_t _touchPointerId{ 0 };
+        uint64_t _touchStartTimestamp{ 0 };
+
+        std::chrono::steady_clock::time_point _touchStartTime{};
+
+        bool _touchSelectionActive{ false };
+        bool _touchScrolling{ false };
 
         using Timestamp = uint64_t;
 
