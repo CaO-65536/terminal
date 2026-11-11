@@ -313,7 +313,7 @@ struct HwndTerminal : public Microsoft::Console::Types::IControlAccessibilityInf
                 break;
             }
             SetCapture(_hwnd.get());
-            _interactivity->TouchPressed(PointFromLParam(lParam)
+            _interactivity->TouchPressed(PointFromLParam(lParam),
                                          0,
                                          uMsg);
             return 0;
