@@ -39,4 +39,4 @@ jobs:
         Set-MsBuildDevEnvironment
         
         Write-Host "开始编译 OpenConsole.slnx..."
-        Invoke-OpenConsoleBuild -Configuration Release -Platform x64
+        Invoke-OpenConsoleBuild
