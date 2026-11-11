@@ -25,9 +25,7 @@ jobs:
     - name: 4. 配置并运行 vcpkg (含自动缓存)
       uses: lukka/run-vcpkg@v11
       with:
-        # 修复参数：使用 vcpkgJsonGlob 代替过时的 vcpkgJsonPath
         vcpkgJsonGlob: 'vcpkg.json'
-        # 默认情况下 lukka/run-vcpkg 已经内置了基于 GitHub Actions Cache 的二进制缓存机制
 
     - name: 5. 使用 PowerShell 官方脚本构建
       shell: pwsh
@@ -41,14 +39,7 @@ jobs:
         Write-Host "开始编译 OpenConsole.slnx..."
         Invoke-OpenConsoleBuild
 
-    - name: 6. 上传构建产物
-      uses: actions/upload-artifact@v4
-      with:
-        name: Windows-Terminal-Build-Output
-        path: |
-          bin/
-          src/cascadia/CascadiaPackage/AppPackages/
-          **/*.msixbundle
-          **/*.zip
-          **/*.exe
-        if-no-files-found: ignore
+    - name: 6. 递归列出项目根目录（排除点开头的项）
+      shell: pwsh
+      run: |
+        Get-ChildItem -Path . -Recurse -Exclude ".*" | Select-Object FullName
