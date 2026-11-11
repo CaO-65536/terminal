@@ -313,7 +313,9 @@ struct HwndTerminal : public Microsoft::Console::Types::IControlAccessibilityInf
                 break;
             }
             SetCapture(_hwnd.get());
-            _interactivity->TouchPressed(PointFromLParam(lParam));
+            _interactivity->TouchPressed(PointFromLParam(lParam),
+                                         0,
+                                         uMsg);
             return 0;
         case WM_POINTERUPDATE:
             if (!IS_POINTER_INCONTACT_WPARAM(wParam))
@@ -323,7 +325,7 @@ struct HwndTerminal : public Microsoft::Console::Types::IControlAccessibilityInf
             _interactivity->TouchMoved(PointFromLParam(lParam));
             return 0;
         case WM_POINTERUP:
-            _interactivity->TouchReleased();
+            _interactivity->TouchReleased(PointFromLParam(lParam));
             ReleaseCapture();
             return 0;
         case WM_MOUSEWHEEL:
