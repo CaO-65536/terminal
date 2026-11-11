@@ -1,0 +1,41 @@
+name: Build Windows Terminal (Latest)
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: 1. 检出 Windows Terminal 源码
+      uses: actions/checkout@v4
+      with:
+        repository: 'microsoft/terminal'
+        submodules: recursive # 必须拉取子模块
+
+    - name: 2. 初始化 MSBuild (匹配 VS 2026)
+      uses: microsoft/setup-msbuild@v3
+
+    - name: 3. 初始化 NuGet
+      uses: nuget/setup-nuget@v3
+
+    - name: 4. 配置 vcpkg (清单模式)
+      uses: lukka/run-vcpkg@v11
+      with:
+        vcpkgJsonPath: 'vcpkg.json'
+
+    - name: 5. 使用 PowerShell 官方脚本构建
+      shell: pwsh
+      run: |
+        Write-Host "导入 OpenConsole 构建模块..."
+        Import-Module .\tools\OpenConsole.psm1
+        
+        Write-Host "配置 MSBuild 开发者环境变量..."
+        Set-MsBuildDevEnvironment
+        
+        Write-Host "开始编译..."
+        # 对应官方文档中的 Invoke-OpenConsoleBuild 脚本
+        Invoke-OpenConsoleBuild -Configuration Release -Platform x64
