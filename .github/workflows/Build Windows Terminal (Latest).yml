@@ -1,45 +1,82 @@
+
 name: Build Windows Terminal
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: windows-latest
 
     steps:
-    - name: 1. 检出 Windows Terminal 源码
+    - name: 1. Checkout Windows Terminal source
       uses: actions/checkout@v4
       with:
-        repository: 'microsoft/terminal'
         submodules: recursive
 
-    - name: 2. 初始化 MSBuild
+    - name: 2. Initialize MSBuild
       uses: microsoft/setup-msbuild@v3
 
-    - name: 3. 初始化 NuGet
+    - name: 3. Initialize NuGet
       uses: nuget/setup-nuget@v3
 
-    - name: 4. 配置并运行 vcpkg (含自动缓存)
+    - name: 4. Configure vcpkg
       uses: lukka/run-vcpkg@v11
       with:
         vcpkgJsonGlob: 'vcpkg.json'
 
-    - name: 5. 使用 PowerShell 官方脚本构建
+    - name: 5. Initialize build environment
       shell: pwsh
       run: |
-        Write-Host "导入 OpenConsole 构建模块..."
         Import-Module .\tools\OpenConsole.psm1
-        
-        Write-Host "配置 MSBuild 开发者环境变量..."
         Set-MsBuildDevEnvironment
-        
-        Write-Host "开始编译 OpenConsole.slnx..."
-        Invoke-OpenConsoleBuild
 
-    - name: 6. 递归列出项目根目录（排除点开头的项）
+    - name: 6. Build Windows Terminal MSIX
       shell: pwsh
       run: |
-        Get-ChildItem -Path . -Recurse -Exclude ".*" | Select-Object FullName
+        $msbuild = (Get-Command MSBuild.exe -ErrorAction Stop).Source
+
+        & $msbuild .\OpenConsole.slnx `
+          /p:Configuration=Release `
+          /p:Platform=x64 `
+          /p:AppxSymbolPackageEnabled=false `
+          /t:Terminal\CascadiaPackage `
+          /m
+
+        if ($LASTEXITCODE -ne 0) {
+          throw "Windows Terminal packaging failed!"
+        }
+
+    - name: 7. List generated packages
+      shell: pwsh
+      run: |
+        $path = ".\src\cascadia\CascadiaPackage\AppPackages"
+
+        if (!(Test-Path $path)) {
+          throw "AppPackages directory not found!"
+        }
+
+        Get-ChildItem $path -Recurse -File |
+          Select-Object FullName, Length
+
+        $packages = Get-ChildItem $path -Recurse -File |
+          Where-Object { $_.Extension -in @(".msix", ".msixbundle") }
+
+        if (!$packages) {
+          throw "No MSIX packages were generated!"
+        }
+
+    - name: 8. Upload Windows Terminal packages
+      uses: actions/upload-artifact@v4
+      with:
+        name: WindowsTerminal-Release-x64
+        path: src/cascadia/CascadiaPackage/AppPackages/**
+        if-no-files-found: error
+        compression-level: 6
+        retention-days: 14
