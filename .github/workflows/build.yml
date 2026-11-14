@@ -1,4 +1,3 @@
-
 name: Build Windows Terminal
 
 on:
@@ -16,6 +15,22 @@ on:
           - raw
           - installer
           - both
+      configuration:
+        description: "Build configuration"
+        required: true
+        type: choice
+        default: Release
+        options:
+          - Debug
+          - Release
+      platform:
+        description: "Target platform"
+        required: true
+        type: choice
+        default: x64
+        options:
+          - x64
+          - ARM64
 
 permissions:
   contents: read
@@ -67,6 +82,9 @@ jobs:
       # 6. Restore dependencies and build
       - name: Restore dependencies and build Windows Terminal
         shell: pwsh
+        env:
+          CONFIGURATION: ${{ inputs.configuration || 'Release' }}
+          PLATFORM: ${{ inputs.platform || 'x64' }}
         run: |
           $ErrorActionPreference = "Stop"
 
@@ -126,16 +144,16 @@ jobs:
             $msbuild = (Get-Command MSBuild.exe -ErrorAction Stop).Source
 
             Write-Host "MSBuild: $msbuild"
-            Write-Host "Configuration: Release"
-            Write-Host "Platform: x64"
+            Write-Host "Configuration: $env:CONFIGURATION"
+            Write-Host "Platform: $env:PLATFORM"
 
             # Build Windows Terminal MSIX
             Write-Host "`n[4/4] Building Windows Terminal..."
 
             $msbuildArgs = @(
               ".\OpenConsole.slnx"
-              "/p:Configuration=Release"
-              "/p:Platform=x64"
+              "/p:Configuration=$env:CONFIGURATION"
+              "/p:Platform=$env:PLATFORM"
               "/p:AppxSymbolPackageEnabled=false"
               "/t:Terminal\CascadiaPackage"
               "/m"
@@ -163,11 +181,89 @@ jobs:
             Stop-Transcript
           }
 
-      # 7. Verify and prepare selected artifacts
+      # 7. Sign main MSIX if PFX secret is configured (skip otherwise)
+      - name: Resolve signing method
+        id: signing
+        shell: pwsh
+        env:
+          PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+        run: |
+          $configured = -not [string]::IsNullOrWhiteSpace($env:PFX_BASE64)
+          "configured=$($configured.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          Write-Host "PFX signing configured: $configured"
+
+      - name: Sign main MSIX
+        if: ${{ steps.signing.outputs.configured == 'true' }}
+        shell: pwsh
+        env:
+          PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          # Decode PFX from secret
+          $pfx = Join-Path $env:RUNNER_TEMP "SigningCert.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX_BASE64))
+
+          # Locate signtool.exe from Windows Kits
+          $signtool = Get-ChildItem `
+            "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $signtool) { throw "signtool.exe not found in Windows Kits" }
+
+          # Locate main MSIX (same package directory logic as Prepare step)
+          $appPackages = ".\src\cascadia\CascadiaPackage\AppPackages"
+          $packageDirs = @(
+            Get-ChildItem $appPackages -Directory |
+              Where-Object {
+                Test-Path (Join-Path $_.FullName "Add-AppDevPackage.ps1")
+              }
+          )
+          if ($packageDirs.Count -eq 0) {
+            throw "No installable package directory found!"
+          }
+          $packageDir = $packageDirs | Select-Object -First 1
+
+          $msix = Get-ChildItem $packageDir.FullName -File -Filter "*.msix" |
+            Select-Object -First 1
+          if (-not $msix) { throw "No MSIX package found!" }
+
+          Write-Host "Signing MSIX: $($msix.FullName)"
+
+          $signArgs = @(
+            "sign"
+            "/fd", "SHA256"
+            "/f", $pfx
+            "/tr", "http://timestamp.digicert.com"
+            "/td", "SHA256"
+            $msix.FullName
+          )
+          if (-not [string]::IsNullOrEmpty($env:PFX_PASSWORD)) {
+            $signArgs = @(
+              "sign"
+              "/fd", "SHA256"
+              "/f", $pfx
+              "/p", $env:PFX_PASSWORD
+              "/tr", "http://timestamp.digicert.com"
+              "/td", "SHA256"
+              $msix.FullName
+            )
+          }
+
+          & $signtool.FullName @signArgs
+          if ($LASTEXITCODE -ne 0) {
+            throw "signtool sign failed! Exit code: $LASTEXITCODE"
+          }
+
+          Write-Host "MSIX signed successfully."
+
+      # 8. Verify and prepare selected artifacts
       - name: Prepare RAW and Installer artifacts
         shell: pwsh
         env:
           OUTPUT_FORMAT: ${{ steps.output_mode.outputs.mode }}
+          PLATFORM: ${{ inputs.platform || 'x64' }}
         run: |
           $ErrorActionPreference = "Stop"
 
@@ -225,7 +321,7 @@ jobs:
             $makeappx = (Get-Command makeappx.exe -ErrorAction Stop).Source
 
             $rawDir = Join-Path $outputRoot "RAW"
-            $rawZip = Join-Path $outputRoot "WindowsTerminal-RAW-x64.zip"
+            $rawZip = Join-Path $outputRoot "WindowsTerminal-RAW-$env:PLATFORM.zip"
 
             New-Item -ItemType Directory -Force -Path $rawDir |
               Out-Null
@@ -260,7 +356,7 @@ jobs:
             Write-Host "`nPreparing Installer artifact..."
 
             $installerDir = Join-Path $outputRoot "Installer"
-            $installerZip = Join-Path $outputRoot "WindowsTerminal-Installer-x64.zip"
+            $installerZip = Join-Path $outputRoot "WindowsTerminal-Installer-$env:PLATFORM.zip"
 
             New-Item -ItemType Directory -Force -Path $installerDir |
               Out-Null
@@ -300,7 +396,7 @@ jobs:
             Select-Object FullName, Length |
             Format-Table -AutoSize
 
-      # 8. Upload diagnostic logs, even if build fails
+      # 9. Upload diagnostic logs, even if build fails
       - name: Upload complete build logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -311,24 +407,24 @@ jobs:
           compression-level: 6
           retention-days: 30
 
-      # 9. Upload RAW
+      # 10. Upload RAW
       - name: Upload Windows Terminal RAW
         if: success() && (steps.output_mode.outputs.mode == 'raw' || steps.output_mode.outputs.mode == 'both')
         uses: actions/upload-artifact@v4
         with:
-          name: WindowsTerminal-RAW-x64
-          path: artifacts/output/WindowsTerminal-RAW-x64.zip
+          name: WindowsTerminal-RAW-${{ inputs.platform || 'x64' }}
+          path: artifacts/output/WindowsTerminal-RAW-${{ inputs.platform || 'x64' }}.zip
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
 
-      # 10. Upload Installer
+      # 11. Upload Installer
       - name: Upload Windows Terminal Installer
         if: success() && (steps.output_mode.outputs.mode == 'installer' || steps.output_mode.outputs.mode == 'both')
         uses: actions/upload-artifact@v4
         with:
-          name: WindowsTerminal-Installer-x64
-          path: artifacts/output/WindowsTerminal-Installer-x64.zip
+          name: WindowsTerminal-Installer-${{ inputs.platform || 'x64' }}
+          path: artifacts/output/WindowsTerminal-Installer-${{ inputs.platform || 'x64' }}.zip
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
