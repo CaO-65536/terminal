@@ -500,8 +500,8 @@ void ControlInteractivity::TouchPressed(const Core::Point contactPoint,
         _core->SetHoveredCell(terminalPosition.to_core_point());
         return handledCompletely;
     }
-
-    void ControlInteractivity::TouchMoved(const Core::Point newTouchPoint)
+void ControlInteractivity::TouchMoved(const Core::Point newTouchPoint,
+                                      const ::Microsoft::Terminal::Core::ControlKeyStates modifiers)
 {
     if (!_focused || !_touchStartPoint)
     {
@@ -533,12 +533,11 @@ void ControlInteractivity::TouchPressed(const Core::Point contactPoint,
             _touchPointerId,
             MouseButtonState::IsLeftButtonDown,
             WM_MOUSEMOVE,
-            {},
+            modifiers,
             newTouchPoint);
 
         return;
     }
-
 
     // Vertical dragging retains the existing touch scrolling behavior.
     if (!_touchScrolling &&
@@ -548,27 +547,26 @@ void ControlInteractivity::TouchPressed(const Core::Point contactPoint,
         _touchScrolling = true;
         _touchAnchor = start;
     }
-if (_touchScrolling && _touchAnchor)
-{
-    const auto anchor = *_touchAnchor;
-    const auto scrollDy = newTouchPoint.Y - anchor.Y;
-
-    if (std::abs(scrollDy) > verticalThreshold)
+    if (_touchScrolling && _touchAnchor)
     {
-        const auto numRows = scrollDy / -fontSize.Height;
+        const auto anchor = *_touchAnchor;
+        const auto scrollDy = newTouchPoint.Y - anchor.Y;
 
-        const auto currentOffset = _core->ScrollOffset();
-        const auto newValue = numRows + currentOffset;
+        if (std::abs(scrollDy) > verticalThreshold)
+        {
+            const auto numRows = scrollDy / -fontSize.Height;
 
-        UpdateScrollbar(newValue);
+            const auto currentOffset = _core->ScrollOffset();
+            const auto newValue = numRows + currentOffset;
 
-        _touchAnchor = newTouchPoint;
+            UpdateScrollbar(newValue);
+
+            _touchAnchor = newTouchPoint;
+        }
+
+        return;
     }
 
-    return;
-}
-
-    
     // Long press followed by movement starts text selection.
     if (longPressed && (absDx > 4.0f || absDy > 4.0f))
     {
@@ -579,14 +577,14 @@ if (_touchScrolling && _touchAnchor)
             MouseButtonState::IsLeftButtonDown,
             WM_LBUTTONDOWN,
             _touchStartTimestamp,
-            {},
+            modifiers,
             start);
 
         PointerMoved(
             _touchPointerId,
             MouseButtonState::IsLeftButtonDown,
             WM_MOUSEMOVE,
-            {},
+            modifiers,
             newTouchPoint);
 
         return;
@@ -603,18 +601,17 @@ if (_touchScrolling && _touchAnchor)
             MouseButtonState::IsLeftButtonDown,
             WM_LBUTTONDOWN,
             _touchStartTimestamp,
-            {},
+            modifiers,
             start);
 
         PointerMoved(
             _touchPointerId,
             MouseButtonState::IsLeftButtonDown,
             WM_MOUSEMOVE,
-            {},
+            modifiers,
             newTouchPoint);
     }
 }
-
     void ControlInteractivity::PointerReleased(const uint32_t pointerId,
                                                Control::MouseButtonState buttonState,
                                                const unsigned int pointerUpdateKind,
