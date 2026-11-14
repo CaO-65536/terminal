@@ -315,17 +315,18 @@ struct HwndTerminal : public Microsoft::Console::Types::IControlAccessibilityInf
             SetCapture(_hwnd.get());
             _interactivity->TouchPressed(PointFromLParam(lParam),
                                          0,
-                                         uMsg);
+                                         uMsg,
+                                         getControlKeyState());   // ← 传递 Ctrl 状态
             return 0;
         case WM_POINTERUPDATE:
             if (!IS_POINTER_INCONTACT_WPARAM(wParam))
             {
                 break;
             }
-            _interactivity->TouchMoved(PointFromLParam(lParam));
+            _interactivity->TouchMoved(PointFromLParam(lParam), getControlKeyState());
             return 0;
         case WM_POINTERUP:
-            _interactivity->TouchReleased(PointFromLParam(lParam));
+            _interactivity->TouchReleased(PointFromLParam(lParam), getControlKeyState());
             ReleaseCapture();
             return 0;
         case WM_MOUSEWHEEL:

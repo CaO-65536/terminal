@@ -388,7 +388,8 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     
 void ControlInteractivity::TouchPressed(const Core::Point contactPoint,
                                         const uint32_t pointerId,
-                                        const uint64_t timestamp)
+                                        const uint64_t timestamp,
+                                        const ::Microsoft::Terminal::Core::ControlKeyStates modifiers)
 {
     _touchStartPoint = contactPoint;
     _touchAnchor = contactPoint;
@@ -399,6 +400,8 @@ void ControlInteractivity::TouchPressed(const Core::Point contactPoint,
 
     _touchSelectionActive = false;
     _touchScrolling = false;
+    // 保存按下时的修饰键（也可直接使用 TouchReleased 传入的最新状态）
+    _touchModifiers = modifiers;
 }
 
     bool ControlInteractivity::PointerMoved(const uint32_t pointerId,
@@ -653,8 +656,8 @@ if (_touchScrolling && _touchAnchor)
         _singleClickTouchdownPos = std::nullopt;
         _tryStopAutoScroll(pointerId);
     }
-
-    void ControlInteractivity::TouchReleased(const Core::Point contactPoint)
+void ControlInteractivity::TouchReleased(const Core::Point contactPoint,
+                                         const ::Microsoft::Terminal::Core::ControlKeyStates modifiers)
 {
     if (!_touchStartPoint)
     {
@@ -667,25 +670,26 @@ if (_touchScrolling && _touchAnchor)
             _touchPointerId,
             {},
             WM_LBUTTONUP,
-            {},
+            modifiers,
             contactPoint);
     }
     else if (!_touchScrolling)
     {
-        // A touch without a drag is a complete left mouse click.
+        // 一个没有拖拽的触摸是一次完整的左键点击。
+        // 关键点：把 modifiers 传下去，否则 Ctrl 触摸永远无法打开链接。
         PointerPressed(
             _touchPointerId,
             MouseButtonState::IsLeftButtonDown,
             WM_LBUTTONDOWN,
             _touchStartTimestamp,
-            {},
+            modifiers,
             *_touchStartPoint);
 
         PointerReleased(
             _touchPointerId,
             {},
             WM_LBUTTONUP,
-            {},
+            modifiers,
             contactPoint);
     }
 
@@ -694,8 +698,8 @@ if (_touchScrolling && _touchAnchor)
 
     _touchSelectionActive = false;
     _touchScrolling = false;
+    _touchModifiers = {};
 }
-
     // Method Description:
     // - Actually handle a scrolling event, whether from a mouse wheel or a
     //   touchpad scroll. Depending upon what modifier keys are pressed,

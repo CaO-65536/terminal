@@ -1975,12 +1975,11 @@ namespace winrt::Microsoft::Terminal::Control::implementation
 
         if (type == Windows::Devices::Input::PointerDeviceType::Touch)
         {
-            // NB: I don't think this is correct because the touch should be in the center of the rect.
-            //     I suspect the point.Position() would be correct.
             _interactivity->TouchPressed(
-        _toTerminalOrigin(point.Position()),
-        point.PointerId(),
-        point.Timestamp());
+                _toTerminalOrigin(point.Position()),
+                point.PointerId(),
+                point.Timestamp(),
+                ControlKeyStates{ args.KeyModifiers() });   // ← 传递 Ctrl 状态
         }
         else
         {
@@ -2033,7 +2032,9 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         }
         else if (type == Windows::Devices::Input::PointerDeviceType::Touch)
         {
-            _interactivity->TouchMoved(pixelPosition);
+            _interactivity->TouchMoved(
+                pixelPosition,
+                ControlKeyStates(args.KeyModifiers()));
         }
 
         args.Handled(true);
@@ -2072,9 +2073,10 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         }
         else if (type == Windows::Devices::Input::PointerDeviceType::Touch)
         {
-            _interactivity->TouchReleased(pixelPosition);
+            _interactivity->TouchReleased(
+                pixelPosition,
+                ControlKeyStates(args.KeyModifiers()));
         }
-
         args.Handled(true);
     }
 

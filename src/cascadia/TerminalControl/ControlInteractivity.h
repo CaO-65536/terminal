@@ -59,21 +59,24 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                             const Core::Point pixelPosition);
         void TouchPressed(const Core::Point contactPoint,
                           const uint32_t pointerId,
-                          const uint64_t timestamp);
+                          const uint64_t timestamp,
+                          const ::Microsoft::Terminal::Core::ControlKeyStates modifiers);
 
         bool PointerMoved(const uint32_t pointerId,
                           Control::MouseButtonState buttonState,
                           const unsigned int pointerUpdateKind,
                           const ::Microsoft::Terminal::Core::ControlKeyStates modifiers,
                           const Core::Point pixelPosition);
-        void TouchMoved(const Core::Point newTouchPoint);
+        void TouchMoved(const Core::Point newTouchPoint,
+                        const ::Microsoft::Terminal::Core::ControlKeyStates modifiers);
 
         void PointerReleased(const uint32_t pointerId,
                              Control::MouseButtonState buttonState,
                              const unsigned int pointerUpdateKind,
                              const ::Microsoft::Terminal::Core::ControlKeyStates modifiers,
                              const Core::Point pixelPosition);
-        void TouchReleased(const Core::Point contactPoint);
+        void TouchReleased(const Core::Point contactPoint,
+                           const ::Microsoft::Terminal::Core::ControlKeyStates modifiers);
 
         bool MouseWheel(const ::Microsoft::Terminal::Core::ControlKeyStates modifiers,
                         const Core::Point delta,
@@ -127,6 +130,8 @@ namespace winrt::Microsoft::Terminal::Control::implementation
 
         bool _touchSelectionActive{ false };
         bool _touchScrolling{ false };
+
+        ::Microsoft::Terminal::Core::ControlKeyStates _touchModifiers{};
 
         using Timestamp = uint64_t;
 
